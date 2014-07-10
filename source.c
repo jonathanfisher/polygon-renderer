@@ -16,7 +16,7 @@
 
 #define POLYGON_POINTS 5
 
-#define N_POLYGONS 500
+#define N_POLYGONS 200
 
 typedef struct {
     int red;
@@ -63,6 +63,11 @@ static void printPolygon(Polygon_t p)
 
     for (i = 0; i < POLYGON_POINTS; i++)
         printPoint(p.Points[i]);
+}
+
+static int coord_to_ind(int x, int y, int width)
+{
+    return (y * width) + x;
 }
 
 static int randrange(int low, int high)
@@ -319,30 +324,98 @@ static int readFile(char const *filename)
     return 0;
 }
 
-static void writeFile(char const *filename, Color_t canvas[WIDTH][HEIGHT])
+static Color_t *readPNG(char const *filename, Color_t dst[WIDTH][HEIGHT],
+        int *h, int *w)
 {
+    int x, y;
+    png_byte color_type;
+    png_structp png_ptr;
+    png_infop info_ptr;
+    png_byte bit_depth;
+    png_bytep *row_pointers;
+    int width, height;
+    char header[8];
     FILE *fp;
-    int i, j;
+    Color_t *buffer;
 
-    fp = fopen(filename, "wt");
+    fp = fopen(filename, "rb");
     if (!fp)
-        abort_("Unable to open file %s\n", filename);
+        abort_("Unable to open %s.\n", filename);
 
-    for (j = 0; j < HEIGHT; j++) {
-        for (i = 0; i < WIDTH; i++) {
-            if (canvas[i][j].red < 0)
-                canvas[i][j].red = 0;
-            if (canvas[i][j].green < 0)
-                canvas[i][j].green = 0;
-            if (canvas[i][j].blue < 0)
-                canvas[i][j].blue = 0;
+    if (fread(header, 1, sizeof(header), fp) != 8)
+        abort_("Read mismatch on header.\n");
 
-            fprintf(fp, "%d, %d, %d\n",
-                    canvas[i][j].red, canvas[i][j].green, canvas[i][j].blue);
+    if (png_sig_cmp(header, 0, 8))
+        abort_("File %s is not recognized as a PNG file.\n", filename);
+
+    png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png_ptr)
+        abort_("Unable to create read struct.\n");
+
+    info_ptr = png_create_info_struct(png_ptr);
+    if (!info_ptr)
+        abort_("Unable to create info structure.\n");
+
+    if (setjmp(png_jmpbuf(png_ptr)))
+        abort_("Error during read IO\n");
+
+    png_init_io(png_ptr, fp);
+    png_set_sig_bytes(png_ptr, 8);
+
+    png_read_info(png_ptr, info_ptr);
+
+    width = png_get_image_width(png_ptr, info_ptr);
+    height = png_get_image_height(png_ptr, info_ptr);
+    color_type = png_get_color_type(png_ptr, info_ptr);
+    bit_depth = png_get_bit_depth(png_ptr, info_ptr);
+    png_read_update_info(png_ptr, info_ptr);
+
+    if (setjmp(png_jmpbuf(png_ptr)))
+        abort_("Error during read_image\n");
+
+    row_pointers = png_malloc(png_ptr, sizeof(png_bytep) * height);
+    for (y = 0; y < height; y++)
+        row_pointers[y] = png_malloc(png_ptr, png_get_rowbytes(png_ptr, info_ptr));
+
+    png_read_image(png_ptr, row_pointers);
+    fclose(fp);
+
+    if (png_get_color_type(png_ptr, info_ptr) != PNG_COLOR_TYPE_RGB)
+        abort_("Expected RGB image.\n");
+
+    /* Allocate memory for the buffer. */
+    buffer = malloc(width * height * sizeof(Color_t));
+    if (!buffer)
+        abort_("Unable to allocate memory.\n");
+
+    for (y = 0; y < height; y++) {
+        png_bytep row = row_pointers[y];
+        for (x = 0; x < width; x++) {
+            png_bytep px = &(row[x * 3]);
+            Color_t *pColor = &buffer[coord_to_ind(x, y, width)];
+
+            pColor->red   = px[0];
+            pColor->green = px[1];
+            pColor->blue  = px[2];
+
+            dst[x][y].red   = px[0];
+            dst[x][y].green = px[1];
+            dst[x][y].blue  = px[2];
         }
     }
 
-    fclose(fp);
+    for (y = 0; y < height; y++)
+        png_free(png_ptr, row_pointers[y]);
+
+    png_free(png_ptr, row_pointers);
+    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+
+    if (h)
+        *h = height;
+    if (w)
+        *w = width;
+
+    return buffer;
 }
 
 static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
@@ -410,14 +483,12 @@ static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
     return status;
 }
 
-static void main_loop(void)
+static void main_loop(Color_t const *original, int width, int height)
 {
     int old_diff = -1;
     int new_diff;
     unsigned int n_used, n_tried;
     char output[64];
-
-    int n = 1000000;
 
     n_used = n_tried = 0;
 
@@ -426,7 +497,7 @@ static void main_loop(void)
     do {
         n_tried++;
         Color_t color = getRandomColor();
-        Polygon_t polygon = getRandomPolygon(WIDTH, HEIGHT);
+        Polygon_t polygon = getRandomPolygon(width, height);
 
         /* Create the temporary canvas. */
         memcpy(mTemporary, mCanvas, sizeof(mCanvas));
@@ -435,7 +506,6 @@ static void main_loop(void)
         drawPolygon(mTemporary, polygon, color, 0.5f);
 
         /* Compare to the original. */
-        //new_diff = canvasDiff(mOriginal, mTemporary);
         new_diff = isSecondOneBetter(mOriginal, mTemporary, old_diff);
         if (new_diff < 0)
             continue;
@@ -450,7 +520,6 @@ static void main_loop(void)
             memcpy(mCanvas, mTemporary, sizeof(mCanvas));
             old_diff = new_diff;
             sprintf(output, "./out/img_%d.png", n_used);
-            //writeFile(output, mCanvas);
             writePNG(output, mCanvas);
         }
     } while (n_used < N_POLYGONS);
@@ -459,6 +528,8 @@ static void main_loop(void)
 int main(int argc, char **argv)
 {
     char const *filename;
+    Color_t *original;
+    int width, height;
 
     srand(time(NULL));
 
@@ -467,10 +538,10 @@ int main(int argc, char **argv)
     else
         filename = argv[1];
 
-    readFile(filename);
+    original = readPNG("starry-night-200x200.png", mOriginal, &width, &height);
+    main_loop(original, width, height);
 
-    main_loop();
-
+    free(original);
     return 0;
 }
 
