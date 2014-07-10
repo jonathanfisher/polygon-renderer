@@ -1,10 +1,12 @@
-#include <png.h>
 #include <time.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
+#include <malloc.h>
+#include <png.h>
 
 #define FILENAME    "raw.dat"
 #define OUTPUT_FILE "c_raw.dat"
@@ -12,9 +14,9 @@
 #define WIDTH  200
 #define HEIGHT 200
 
-#define POLYGON_POINTS 6
+#define POLYGON_POINTS 5
 
-#define N_POLYGONS 300
+#define N_POLYGONS 500
 
 typedef struct {
     int red;
@@ -251,6 +253,47 @@ static unsigned long canvasDiff(Color_t src[WIDTH][HEIGHT],
     return d;
 }
 
+static int isSecondOneBetter(Color_t first[WIDTH][HEIGHT],
+        Color_t second[WIDTH][HEIGHT], int difference)
+{
+    int x, y;
+    int r1, g1, b1;
+    int r2, g2, b2;
+    int dr, dg, db;
+    unsigned long d;
+
+    d = 0;
+
+    for (y = 0; y < HEIGHT; y++) {
+        for (x = 0; x < WIDTH; x++) {
+            r1 = first[x][y].red;
+            g1 = first[x][y].green;
+            b1 = first[x][y].blue;
+
+            r2 = second[x][y].red;
+            g2 = second[x][y].green;
+            b2 = second[x][y].blue;
+
+            if (r1 == -1 || g1 == -1 || b1 == -1
+                    || r2 == -1 || g2 == -1 || b2 == -1)
+                continue;
+
+            dr = abs(r1 - r2);
+            dg = abs(g1 - g2);
+            db = abs(b1 - b2);
+
+            d += dr + dg + db;
+            if (d > difference && difference >= 0)
+                return -1;
+        }
+    }
+
+    if (difference < 0)
+        return d;
+
+    return (d < difference) ? d : -1;
+}
+
 static int readFile(char const *filename)
 {
     FILE *fp;
@@ -302,6 +345,71 @@ static void writeFile(char const *filename, Color_t canvas[WIDTH][HEIGHT])
     fclose(fp);
 }
 
+static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
+{
+    FILE *fp;
+    png_structp png_ptr = NULL;
+    png_infop info_ptr  = NULL;
+    png_byte ** row_pointers = NULL;
+    int status = -1;
+    int pixel_size = 3;
+    int depth = 8;
+    size_t x, y;
+
+    fp = fopen(filename, "wb");
+    if (!fp)
+        abort_("Unable to open file %s\n", filename);
+
+    png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png_ptr)
+        abort_("Unable to create PNG write struct.\n");
+
+    info_ptr = png_create_info_struct(png_ptr);
+    if (!info_ptr)
+        abort_("Unable to create info structure.\n");
+
+    if (setjmp(png_jmpbuf(png_ptr))) {
+        fprintf(stderr, "Error during PNG creation.\n");
+        return -1;
+    }
+
+    png_set_IHDR(png_ptr,
+            info_ptr,
+            WIDTH,
+            HEIGHT,
+            depth,
+            PNG_COLOR_TYPE_RGB,
+            PNG_INTERLACE_NONE,
+            PNG_COMPRESSION_TYPE_DEFAULT,
+            PNG_FILTER_TYPE_DEFAULT);
+
+    row_pointers = png_malloc(png_ptr, HEIGHT * sizeof(png_byte *));
+    for (y = 0; y < HEIGHT; y++) {
+        png_byte *row = png_malloc(png_ptr, sizeof(uint8_t) * WIDTH * pixel_size);
+        row_pointers[y] = row;
+        for (x = 0; x < WIDTH; x++) {
+            *row++ = canvas[x][y].red;
+            *row++ = canvas[x][y].green;
+            *row++ = canvas[x][y].blue;
+        }
+    }
+
+    png_init_io(png_ptr, fp);
+    png_set_rows(png_ptr, info_ptr, row_pointers);
+    png_write_png(png_ptr, info_ptr, PNG_TRANSFORM_IDENTITY, NULL);
+
+    status = 0;
+
+    for (y = 0; y < HEIGHT; y++)
+        png_free(png_ptr, row_pointers[y]);
+
+    png_free(png_ptr, row_pointers);
+    png_destroy_write_struct(&png_ptr, &info_ptr);
+    fclose(fp);
+
+    return status;
+}
+
 static void main_loop(void)
 {
     int old_diff = -1;
@@ -327,7 +435,10 @@ static void main_loop(void)
         drawPolygon(mTemporary, polygon, color, 0.5f);
 
         /* Compare to the original. */
-        new_diff = canvasDiff(mOriginal, mTemporary);
+        //new_diff = canvasDiff(mOriginal, mTemporary);
+        new_diff = isSecondOneBetter(mOriginal, mTemporary, old_diff);
+        if (new_diff < 0)
+            continue;
 
         /* If we've improved, keep the new version */
         if (old_diff < 0 || new_diff < old_diff) {
@@ -338,8 +449,9 @@ static void main_loop(void)
 
             memcpy(mCanvas, mTemporary, sizeof(mCanvas));
             old_diff = new_diff;
-            sprintf(output, "./out/img_%d.dat", n_used);
-            writeFile(output, mCanvas);
+            sprintf(output, "./out/img_%d.png", n_used);
+            //writeFile(output, mCanvas);
+            writePNG(output, mCanvas);
         }
     } while (n_used < N_POLYGONS);
 }

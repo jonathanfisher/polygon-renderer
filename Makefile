@@ -8,6 +8,8 @@ DEP := $(patsubst %.c, %.d, $(SRC))
 
 CFLAGS += -O3
 
+LDFLAGS += -lm -lpng
+
 .PHONY: clean
 
 $(EXE): $(OBJ)
