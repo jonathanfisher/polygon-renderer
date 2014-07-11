@@ -6,9 +6,11 @@ SRC := source.c
 OBJ := $(patsubst %.c, %.o, $(SRC))
 DEP := $(patsubst %.c, %.d, $(SRC))
 
+#CFLAGS += -pg -lc -g
 CFLAGS += -O3
 
 LDFLAGS += -lm -lpng
+#LDFLAGS += -pg -lc -g
 
 .PHONY: clean
 

@@ -5,18 +5,22 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <getopt.h>
 #include <malloc.h>
 #include <png.h>
 
-#define FILENAME    "raw.dat"
-#define OUTPUT_FILE "c_raw.dat"
+#define INPUT_IMAGE "starry-night-200x200.png"
 
-#define WIDTH  200
-#define HEIGHT 200
+#define MAX_COLOR_VALUE 255
 
-#define POLYGON_POINTS 5
+#define POLYGON_POINTS 8
+
+#define MAX_POLYGON_POINTS 10
 
 #define N_POLYGONS 200
+
+#define likely(x)   __builtin_expect((x), 1)
+#define unlikely(x) __builtin_expect((x), 0)
 
 typedef struct {
     int red;
@@ -30,12 +34,8 @@ typedef struct {
 } Point_t;
 
 typedef struct {
-    Point_t Points[POLYGON_POINTS];
+    Point_t Points[MAX_POLYGON_POINTS];
 } Polygon_t;
-
-static Color_t mOriginal[WIDTH][HEIGHT];
-static Color_t mCanvas[WIDTH][HEIGHT];
-static Color_t mTemporary[WIDTH][HEIGHT];
 
 static void abort_(const char *s, ...)
 {
@@ -57,11 +57,11 @@ static void printPoint(Point_t p)
     printf("(%d, %d)\n", p.x, p.y);
 }
 
-static void printPolygon(Polygon_t p)
+static void printPolygon(Polygon_t p, int n_points)
 {
     int i;
 
-    for (i = 0; i < POLYGON_POINTS; i++)
+    for (i = 0; i < n_points; i++)
         printPoint(p.Points[i]);
 }
 
@@ -102,12 +102,12 @@ static Point_t getRandomPoint(int width, int height)
     return pt;
 }
 
-static Polygon_t getRandomPolygon(int width, int height)
+static Polygon_t getRandomPolygon(int width, int height, int n_points)
 {
     Polygon_t pg = {0};
     int i;
 
-    for (i = 0; i < POLYGON_POINTS; i++)
+    for (i = 0; i < n_points; i++)
         pg.Points[i] = getRandomPoint(width, height);
 
     return pg;
@@ -118,16 +118,16 @@ static unsigned char weightedAverage(int a,
 {
     int result;
 
-    if (weight > 1.0f || weight < 0.0f)
+    if (unlikely(weight > 1.0f || weight < 0.0f))
         abort_("Weight must be between 0 and 1\n");
 
-    if (a == -1 && b == -1)
+    if (unlikely(a == -1 && b == -1))
         abort_("%s: At least one of the arguments must be >= 0.\n", __func__);
 
-    if (a == -1)
+    if (unlikely(a == -1))
         return b;
 
-    if (b == -1)
+    if (unlikely(b == -1))
         return a;
 
     result = (unsigned char)( ((1.0-weight) * (float)a) +
@@ -147,43 +147,45 @@ static Color_t averageColors(Color_t a, Color_t b, float weight)
     return avg;
 }
 
-static void setPixel(Color_t canvas[WIDTH][HEIGHT], int x, int y,
+static void setPixel(Color_t *canvas, int width, int height, int x, int y,
         int r, int g, int b)
 {
-    if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
-        canvas[x][y].red   = r;
-        canvas[x][y].green = g;
-        canvas[x][y].blue  = b;
+    if (likely(x >= 0 && x < width && y >= 0 && y < height)) {
+        int index = coord_to_ind(x, y, width);
+        canvas[index].red   = r;
+        canvas[index].green = g;
+        canvas[index].blue  = b;
     }
 }
 
-static void setWeightedPixel(Color_t canvas[WIDTH][HEIGHT], int x, int y,
-        Color_t color, float weight)
+static void setWeightedPixel(Color_t *canvas, int width, int height,
+        int x, int y, Color_t color, float weight)
 {
-    Color_t avg = averageColors(canvas[x][y], color, weight);
+    Color_t avg = averageColors(canvas[coord_to_ind(x, y, width)],
+            color, weight);
 
-    setPixel(canvas, x, y, avg.red, avg.green, avg.blue);
+    setPixel(canvas, width, height, x, y, avg.red, avg.green, avg.blue);
 }
 
-static void clearCanvas(Color_t canvas[WIDTH][HEIGHT])
+static void clearCanvas(Color_t *canvas, int width, int height)
 {
     int i, j;
 
-    for (j = 0; j < HEIGHT; j++)
-        for (i = 0; i < WIDTH; i++)
-            setPixel(canvas, i, j, 0, 0, 0);
+    for (j = 0; j < height; j++)
+        for (i = 0; i < width; i++)
+            setPixel(canvas, width, height, i, j, 0, 0, 0);
 }
 
-static void drawPolygon(Color_t canvas[WIDTH][HEIGHT],
-        Polygon_t pg, Color_t color, float weight)
+static void drawPolygon(Color_t *canvas, int width, int height,
+        Polygon_t pg, int n_points, Color_t color, float weight)
 {
-    int nodes, nodeX[POLYGON_POINTS], pixelX, pixelY, i, j, swap;
+    int nodes, nodeX[MAX_POLYGON_POINTS], pixelX, pixelY, i, j, swap;
 
-    for (pixelY = 0; pixelY < HEIGHT; pixelY++) {
+    for (pixelY = 0; pixelY < height; pixelY++) {
         // Build a list of nodes.
         nodes = 0;
-        j = POLYGON_POINTS - 1;
-        for (i = 0; i < POLYGON_POINTS; i++) {
+        j = n_points - 1;
+        for (i = 0; i < n_points; i++) {
             if (pg.Points[i].y < pixelY && pg.Points[j].y >= pixelY
                     || pg.Points[j].y < pixelY && pg.Points[i].y >= pixelY) {
                 nodeX[nodes++] =
@@ -207,23 +209,21 @@ static void drawPolygon(Color_t canvas[WIDTH][HEIGHT],
 
         // Fill the pixels between node pairs.
         for (i = 0; i < nodes; i += 2) {
-            if (nodeX[i] >= WIDTH) break;
+            if (nodeX[i] >= width) break;
             if (nodeX[i + 1] > 0) {
                 if (nodeX[i] < 0) nodeX[i] = 0;
-                if (nodeX[i+1] >= WIDTH) nodeX[i+1] = WIDTH-1;
+                if (nodeX[i+1] >= width) nodeX[i+1] = width-1;
                 for (j = nodeX[i]; j < nodeX[i + 1]; j++) {
-                    /* Fill the pixel. */
-                    //setPixel(canvas, j, pixelY, color.red, color.green, color.blue);
                     /* Average the pixels. */
-                    setWeightedPixel(canvas, j, pixelY, color, weight);
+                    setWeightedPixel(canvas, width, height, j, pixelY, color, weight);
                 }
             }
         }
     }
 }
 
-static unsigned long canvasDiff(Color_t src[WIDTH][HEIGHT],
-        Color_t canvas[WIDTH][HEIGHT])
+static unsigned long canvasDiff(Color_t *src,
+        Color_t *canvas, int width, int height)
 {
     int x, y;
     int r1, g1, b1;
@@ -233,15 +233,17 @@ static unsigned long canvasDiff(Color_t src[WIDTH][HEIGHT],
 
     d = 0;
 
-    for (y = 0; y < HEIGHT; y++) {
-        for (x = 0; x < WIDTH; x++) {
-            r1 = src[x][y].red;
-            g1 = src[x][y].green;
-            b1 = src[x][y].blue;
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            int index = coord_to_ind(x, y, width);
 
-            r2 = canvas[x][y].red;
-            g2 = canvas[x][y].green;
-            b2 = canvas[x][y].blue;
+            r1 = src[index].red;
+            g1 = src[index].green;
+            b1 = src[index].blue;
+
+            r2 = canvas[index].red;
+            g2 = canvas[index].green;
+            b2 = canvas[index].blue;
 
             if (r1 == -1 || g1 == -1 || b1 == -1
                     || r2 == -1 || g2 == -1 || b2 == -1)
@@ -258,8 +260,8 @@ static unsigned long canvasDiff(Color_t src[WIDTH][HEIGHT],
     return d;
 }
 
-static int isSecondOneBetter(Color_t first[WIDTH][HEIGHT],
-        Color_t second[WIDTH][HEIGHT], int difference)
+static int isSecondOneBetter(Color_t *first,
+        Color_t *second, int width, int height, int difference)
 {
     int x, y;
     int r1, g1, b1;
@@ -269,15 +271,17 @@ static int isSecondOneBetter(Color_t first[WIDTH][HEIGHT],
 
     d = 0;
 
-    for (y = 0; y < HEIGHT; y++) {
-        for (x = 0; x < WIDTH; x++) {
-            r1 = first[x][y].red;
-            g1 = first[x][y].green;
-            b1 = first[x][y].blue;
+    for (y = 0; y < height; y++) {
+        for (x = 0; x < width; x++) {
+            int index = coord_to_ind(x, y, width);
 
-            r2 = second[x][y].red;
-            g2 = second[x][y].green;
-            b2 = second[x][y].blue;
+            r1 = first[index].red;
+            g1 = first[index].green;
+            b1 = first[index].blue;
+
+            r2 = second[index].red;
+            g2 = second[index].green;
+            b2 = second[index].blue;
 
             if (r1 == -1 || g1 == -1 || b1 == -1
                     || r2 == -1 || g2 == -1 || b2 == -1)
@@ -299,33 +303,8 @@ static int isSecondOneBetter(Color_t first[WIDTH][HEIGHT],
     return (d < difference) ? d : -1;
 }
 
-static int readFile(char const *filename)
-{
-    FILE *fp;
-    char line[80];
-    int x, y;
-
-    fp = fopen(filename, "rt");
-    if (!fp)
-        abort_("Unable to open file %s.\n", filename);
-
-    for (y = 0; y < HEIGHT; y++) {
-        for (x = 0; x < WIDTH; x++) {
-            if (!fgets(line, sizeof(line), fp))
-                abort_("Unable to read file.\n");
-            sscanf(line, "%d, %d, %d",
-                    &mOriginal[x][y].red,
-                    &mOriginal[x][y].green,
-                    &mOriginal[x][y].blue);
-        }
-    }
-
-    fclose(fp);
-    return 0;
-}
-
-static Color_t *readPNG(char const *filename, Color_t dst[WIDTH][HEIGHT],
-        int *h, int *w)
+static Color_t *readPNG(char const *filename,
+        int *w, int *h)
 {
     int x, y;
     png_byte color_type;
@@ -397,10 +376,6 @@ static Color_t *readPNG(char const *filename, Color_t dst[WIDTH][HEIGHT],
             pColor->red   = px[0];
             pColor->green = px[1];
             pColor->blue  = px[2];
-
-            dst[x][y].red   = px[0];
-            dst[x][y].green = px[1];
-            dst[x][y].blue  = px[2];
         }
     }
 
@@ -418,7 +393,8 @@ static Color_t *readPNG(char const *filename, Color_t dst[WIDTH][HEIGHT],
     return buffer;
 }
 
-static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
+static int writePNG(char const *filename, Color_t *canvas,
+        int width, int height)
 {
     FILE *fp;
     png_structp png_ptr = NULL;
@@ -448,22 +424,23 @@ static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
 
     png_set_IHDR(png_ptr,
             info_ptr,
-            WIDTH,
-            HEIGHT,
+            width,
+            height,
             depth,
             PNG_COLOR_TYPE_RGB,
             PNG_INTERLACE_NONE,
             PNG_COMPRESSION_TYPE_DEFAULT,
             PNG_FILTER_TYPE_DEFAULT);
 
-    row_pointers = png_malloc(png_ptr, HEIGHT * sizeof(png_byte *));
-    for (y = 0; y < HEIGHT; y++) {
-        png_byte *row = png_malloc(png_ptr, sizeof(uint8_t) * WIDTH * pixel_size);
+    row_pointers = png_malloc(png_ptr, height * sizeof(png_byte *));
+    for (y = 0; y < height; y++) {
+        png_byte *row = png_malloc(png_ptr, sizeof(uint8_t) * width* pixel_size);
         row_pointers[y] = row;
-        for (x = 0; x < WIDTH; x++) {
-            *row++ = canvas[x][y].red;
-            *row++ = canvas[x][y].green;
-            *row++ = canvas[x][y].blue;
+        for (x = 0; x < width; x++) {
+            int index = coord_to_ind(x, y, width);
+            *row++ = canvas[index].red;
+            *row++ = canvas[index].green;
+            *row++ = canvas[index].blue;
         }
     }
 
@@ -473,7 +450,7 @@ static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
 
     status = 0;
 
-    for (y = 0; y < HEIGHT; y++)
+    for (y = 0; y < height; y++)
         png_free(png_ptr, row_pointers[y]);
 
     png_free(png_ptr, row_pointers);
@@ -483,63 +460,130 @@ static int writePNG(char const *filename, Color_t canvas[WIDTH][HEIGHT])
     return status;
 }
 
-static void main_loop(Color_t const *original, int width, int height)
+static void main_loop(Color_t *original, int width, int height,
+        int n_points, int n_polygons)
 {
     int old_diff = -1;
-    int new_diff;
+    unsigned int new_diff;
     unsigned int n_used, n_tried;
+    unsigned int max_diff;
     char output[64];
+    Color_t *temporary;
+    Color_t *canvas;
 
     n_used = n_tried = 0;
 
-    clearCanvas(mCanvas);
+    /* The most different a test image can be. */
+    max_diff = MAX_COLOR_VALUE * (unsigned int)width * (unsigned int)height * 3;
+
+    temporary = malloc(width * height * sizeof(Color_t));
+    if (!temporary)
+        abort_("Unable to allocate temporary buffer.\n");
+
+    canvas = malloc(width * height * sizeof(Color_t));
+    if (!canvas)
+        abort_("Unable to allocate canvas buffer.\n");
+
+    clearCanvas(canvas, width, height);
 
     do {
         n_tried++;
+
+        /* Generate a randomly-colored polygon. */
         Color_t color = getRandomColor();
-        Polygon_t polygon = getRandomPolygon(width, height);
+        Polygon_t polygon = getRandomPolygon(width, height, n_points);
 
         /* Create the temporary canvas. */
-        memcpy(mTemporary, mCanvas, sizeof(mCanvas));
+        memcpy(temporary, canvas, width*height*sizeof(Color_t));
 
         /* Add a polygon. */
-        drawPolygon(mTemporary, polygon, color, 0.5f);
+        drawPolygon(temporary, width, height, polygon, n_points, color, 0.5f);
 
         /* Compare to the original. */
-        new_diff = isSecondOneBetter(mOriginal, mTemporary, old_diff);
+        new_diff = isSecondOneBetter(original, temporary, width, height, old_diff);
         if (new_diff < 0)
             continue;
 
         /* If we've improved, keep the new version */
         if (old_diff < 0 || new_diff < old_diff) {
             n_used++;
+            double percent = 100.0f - ((100.0f * (double)new_diff) / (double)max_diff);
 
-            printf("Improved by %d!  %u / %u\n",
-                    abs(old_diff - new_diff), n_used, n_tried);
+            printf("%d / %d (tested %d) -- %.02f%%\n",
+                    n_used, n_polygons, n_tried, percent);
 
-            memcpy(mCanvas, mTemporary, sizeof(mCanvas));
+            memcpy(canvas, temporary, width*height*sizeof(Color_t));
             old_diff = new_diff;
             sprintf(output, "./out/img_%d.png", n_used);
-            writePNG(output, mCanvas);
+            writePNG(output, canvas, width, height);
         }
-    } while (n_used < N_POLYGONS);
+    } while (n_used < n_polygons);
+
+    free(temporary);
+    free(canvas);
+}
+
+static void process_args(int argc, char **argv,
+        char **src_path, int *n_points, int *n_polygons)
+{
+    int c;
+    int digit_optind = 0;
+    static struct option long_options[] = {
+        { "src",   required_argument, 0, 0 },
+        { "sides", required_argument, 0, 0 },
+        { "npoly", required_argument, 0, 0 },
+        { NULL, 0, NULL, 0 }
+    };
+    int option_index = 0;
+
+    while ((c = getopt_long(argc, argv, "", long_options, &option_index)) != -1) {
+        int this_option_optind = optind ? optind : 1;
+        switch (c) {
+        case 0:
+            if (option_index == 0) {
+                *src_path = optarg;
+            } else if (option_index == 1) {
+                *n_points = atoi(optarg);
+                if (*n_points <= 2)
+                    abort_("Must have at least 3 points.\n");
+                else if (*n_points > MAX_POLYGON_POINTS)
+                    abort_("Must have <= %d points.\n", MAX_POLYGON_POINTS);
+            } else if (option_index == 2) {
+                *n_polygons = atoi(optarg);
+                if (*n_polygons <= 0)
+                    abort_("Must have at least 1 polygon.\n");
+            }
+            printf("Option %s", long_options[option_index].name);
+            if (optarg)
+                printf(" with arg %s", optarg);
+            printf("\n");
+            break;
+
+        default:
+            printf("Usage: %s\n", argv[0]);
+            printf("\t--src <path to PNG src image>\n");
+            printf("\t--sides <# of polygon sides>\n");
+            printf("\t--npoly <# of polygons to generate>\n");
+            exit(0);
+            break;
+        }
+    }
 }
 
 int main(int argc, char **argv)
 {
-    char const *filename;
     Color_t *original;
     int width, height;
+    int n_polygons = N_POLYGONS;
+    int n_sides    = POLYGON_POINTS;
+    char *filename = INPUT_IMAGE;
+
+    process_args(argc, argv, &filename, &n_sides, &n_polygons);
 
     srand(time(NULL));
 
-    if (argc < 2)
-        filename = FILENAME;
-    else
-        filename = argv[1];
-
-    original = readPNG("starry-night-200x200.png", mOriginal, &width, &height);
-    main_loop(original, width, height);
+    original = readPNG(filename, &width, &height);
+    main_loop(original, width, height, n_sides, n_polygons);
 
     free(original);
     return 0;
