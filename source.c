@@ -13,12 +13,15 @@
 
 #define MAX_COLOR_VALUE 255
 
-#define POLYGON_POINTS 8
+#define DEFAULT_POLYGON_POINTS 4
 
 #define MAX_POLYGON_POINTS 10
 
 #define N_POLYGONS 200
 
+/*
+ * These macros are used to help the compiler do some branch prediction.
+ */
 #define likely(x)   __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
 
@@ -37,6 +40,11 @@ typedef struct {
     Point_t Points[MAX_POLYGON_POINTS];
 } Polygon_t;
 
+/**
+ * This function is called when the program needs to end after an unrecoverable
+ * error.  Specifically, this is called when there is a bad argument, or there
+ * is something wrong with reading/writing a file.
+ */
 static void abort_(const char *s, ...)
 {
     va_list args;
@@ -47,16 +55,26 @@ static void abort_(const char *s, ...)
     abort();
 }
 
+/**
+ * Print a given color to stdout in a human-readable way.
+ */
 static void printColor(Color_t c)
 {
     printf("RGB: (%d, %d, %d)\n", c.red, c.green, c.blue);
 }
 
+/**
+ * Print a specific point to stdout in a human-readable way.
+ */
 static void printPoint(Point_t p)
 {
     printf("(%d, %d)\n", p.x, p.y);
 }
 
+/**
+ * Print a polygon to stdout in a human-readable way.  This is done by
+ * iterating through the points that make up the polygon and printing them.
+ */
 static void printPolygon(Polygon_t p, int n_points)
 {
     int i;
@@ -65,11 +83,20 @@ static void printPolygon(Polygon_t p, int n_points)
         printPoint(p.Points[i]);
 }
 
+/**
+ * Convert a given X,Y coordinate to a linear index.  This is used because the
+ * arrays used are actually vectors, but it is easier for me to think of X,Y
+ * coordinates.
+ */
 static int coord_to_ind(int x, int y, int width)
 {
     return (y * width) + x;
 }
 
+/**
+ * Generate a random integer in a given range.  Note that this is intended to be
+ * inclusive (low & high are valid values).
+ */
 static int randrange(int low, int high)
 {
     double r;
@@ -77,21 +104,30 @@ static int randrange(int low, int high)
     if (low > high)
         abort_("Lower boundary must be <= high boundary.\n");
 
-    r = ((double)rand() / (double)((double)RAND_MAX + 1.0)) * (high - low + 1) + low;
+    r = ((double)rand() / (double)((double)RAND_MAX + 1.0))
+        * (high - low + 1) + low;
     return (int)r;
 }
 
+/**
+ * Generate a random RGB color.  This is done by setting each channel of the
+ * color to a random value between 0 and the maximum color value (255).
+ */
 static Color_t getRandomColor(void)
 {
     Color_t color;
 
-    color.red   = randrange(0, 255);
-    color.green = randrange(0, 255);
-    color.blue  = randrange(0, 255);
+    color.red   = randrange(0, MAX_COLOR_VALUE);
+    color.green = randrange(0, MAX_COLOR_VALUE);
+    color.blue  = randrange(0, MAX_COLOR_VALUE);
 
     return color;
 }
 
+/**
+ * Get a random point in a given range.  This is done by generating one X value
+ * and one Y value according to the size given.
+ */
 static Point_t getRandomPoint(int width, int height)
 {
     Point_t pt;
@@ -102,6 +138,10 @@ static Point_t getRandomPoint(int width, int height)
     return pt;
 }
 
+/**
+ * Generate a random polygon given maximum size and the number of points it
+ * should be.
+ */
 static Polygon_t getRandomPolygon(int width, int height, int n_points)
 {
     Polygon_t pg = {0};
@@ -113,6 +153,17 @@ static Polygon_t getRandomPolygon(int width, int height, int n_points)
     return pg;
 }
 
+/**
+ * Calculate the weighted average of two integers.  The weight argument is
+ * applied to the second argument.
+ *
+ * Example:
+ * weightedAverage(2, 10, 0.25)
+ *   = (1 - 0.25) x (2) + (0.25 x 10)
+ *   = (0.75 x 2) + (0.25 x 10)
+ *   = 1.5 + 2.5
+ *   = 4
+ */
 static unsigned char weightedAverage(int a,
         int b, float weight)
 {
@@ -136,6 +187,10 @@ static unsigned char weightedAverage(int a,
     return result;
 }
 
+/**
+ * Average two colors together according to the given weight.  This simply
+ * averages each channel of the RGB color according to the given weight.
+ */
 static Color_t averageColors(Color_t a, Color_t b, float weight)
 {
     Color_t avg;
@@ -147,6 +202,9 @@ static Color_t averageColors(Color_t a, Color_t b, float weight)
     return avg;
 }
 
+/**
+ * Set the color of a given X,Y pixel.
+ */
 static void setPixel(Color_t *canvas, int width, int height, int x, int y,
         int r, int g, int b)
 {
@@ -158,6 +216,10 @@ static void setPixel(Color_t *canvas, int width, int height, int x, int y,
     }
 }
 
+/**
+ * Essentially merges in a given color to an existing pixel according to the
+ * given weight.
+ */
 static void setWeightedPixel(Color_t *canvas, int width, int height,
         int x, int y, Color_t color, float weight)
 {
@@ -167,6 +229,9 @@ static void setWeightedPixel(Color_t *canvas, int width, int height,
     setPixel(canvas, width, height, x, y, avg.red, avg.green, avg.blue);
 }
 
+/**
+ * Sets all of the pixels in a given canvas to a specific value.
+ */
 static void clearCanvas(Color_t *canvas, int width, int height)
 {
     int i, j;
@@ -176,6 +241,10 @@ static void clearCanvas(Color_t *canvas, int width, int height)
             setPixel(canvas, width, height, i, j, 0, 0, 0);
 }
 
+/**
+ * Merge the given polygon into the given canvas using the given color and
+ * weight.
+ */
 static void drawPolygon(Color_t *canvas, int width, int height,
         Polygon_t pg, int n_points, Color_t color, float weight)
 {
@@ -222,6 +291,11 @@ static void drawPolygon(Color_t *canvas, int width, int height,
     }
 }
 
+/**
+ * Compare two canvases and return the difference between them.  This is done
+ * by keeping a running sum of the differences.  This is rather slow, and
+ * shouldn't be used anymore.
+ */
 static unsigned long canvasDiff(Color_t *src,
         Color_t *canvas, int width, int height)
 {
@@ -260,6 +334,14 @@ static unsigned long canvasDiff(Color_t *src,
     return d;
 }
 
+/**
+ * Compares two canvases.  This is an improvement upon the canvasDiff(...)
+ * function because it will stop running after it determines that the canvases
+ * are more different than the given difference argument.
+ *
+ * This saves time because this function doesn't require traversing the entire
+ * canvas if it's not necessary.
+ */
 static int isSecondOneBetter(Color_t *first,
         Color_t *second, int width, int height, int difference)
 {
@@ -303,6 +385,11 @@ static int isSecondOneBetter(Color_t *first,
     return (d < difference) ? d : -1;
 }
 
+/**
+ * Read in a PNG file and return it in a buffer pointer.  Make sure to fill
+ * in the w & h parameters with the width & height of the image.  Given filename
+ * must point to a PNG file.
+ */
 static Color_t *readPNG(char const *filename,
         int *w, int *h)
 {
@@ -393,6 +480,9 @@ static Color_t *readPNG(char const *filename,
     return buffer;
 }
 
+/**
+ * Write a given canvas to a specific file.
+ */
 static int writePNG(char const *filename, Color_t *canvas,
         int width, int height)
 {
@@ -460,6 +550,11 @@ static int writePNG(char const *filename, Color_t *canvas,
     return status;
 }
 
+/**
+ * This is the main loop for the program.  It is given a reference image and
+ * the size, as well as various parameters used to define polygon type,
+ * how many to use, and the target difference percentage.
+ */
 static void main_loop(Color_t *original, int width, int height,
         int n_points, int n_polygons, double target_percentage)
 {
@@ -477,6 +572,8 @@ static void main_loop(Color_t *original, int width, int height,
     /* The most different a test image can be. */
     max_diff = MAX_COLOR_VALUE * (unsigned int)width * (unsigned int)height * 3;
 
+    /* Allocate the buffers used--one for a temporary buffer, and one for
+     * holding our work-in-progress. */
     temporary = malloc(width * height * sizeof(Color_t));
     if (!temporary)
         abort_("Unable to allocate temporary buffer.\n");
@@ -485,6 +582,7 @@ static void main_loop(Color_t *original, int width, int height,
     if (!canvas)
         abort_("Unable to allocate canvas buffer.\n");
 
+    /* Start with a blank canvas. */
     clearCanvas(canvas, width, height);
 
     do {
@@ -494,7 +592,8 @@ static void main_loop(Color_t *original, int width, int height,
         Color_t color = getRandomColor();
         Polygon_t polygon = getRandomPolygon(width, height, n_points);
 
-        /* Create the temporary canvas. */
+        /* Create the temporary canvas by starting with the current work in
+         * progress. */
         memcpy(temporary, canvas, width*height*sizeof(Color_t));
 
         /* Add a polygon. */
@@ -528,6 +627,10 @@ static void main_loop(Color_t *original, int width, int height,
     free(canvas);
 }
 
+/**
+ * Get any arguments from the command line.  This should be cleaned up, because
+ * it feels way hackier than it should.
+ */
 static void process_args(int argc, char **argv,
         char **src_path, int *n_points, int *n_polygons, double *percentage)
 {
@@ -574,21 +677,29 @@ static void process_args(int argc, char **argv,
     }
 }
 
+/**
+ * Entry point for the program.
+ */
 int main(int argc, char **argv)
 {
     Color_t *original;
     int width, height;
-    int n_polygons = N_POLYGONS;
-    int n_sides    = POLYGON_POINTS;
+    int n_polygons           = N_POLYGONS;
+    int n_sides              = DEFAULT_POLYGON_POINTS;
     double target_percentage = -1.0f;
-    char *filename = INPUT_IMAGE;
+    char *filename           = INPUT_IMAGE;
 
+    /* Check for any command-line arguments. */
     process_args(argc, argv, &filename, &n_sides, &n_polygons,
             &target_percentage);
 
+    /* Seed the random number generated with the current time. */
     srand(time(NULL));
 
+    /* Read in the original image. */
     original = readPNG(filename, &width, &height);
+
+    /* Kick off the polygon loop. */
     main_loop(original, width, height, n_sides, n_polygons, target_percentage);
 
     free(original);
