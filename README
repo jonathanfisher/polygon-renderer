@@ -1,0 +1,8 @@
+This program tries to recreate a reference image using a randomly-colored and
+randomly-generated polygon.  This can take a very long time, depending on the
+reference image used!
+
+This is intended to be run using a small PNG reference image (200px x 200px
+seems to work well).
+
+Output images will be placed in the out/ directory.

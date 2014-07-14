@@ -461,12 +461,13 @@ static int writePNG(char const *filename, Color_t *canvas,
 }
 
 static void main_loop(Color_t *original, int width, int height,
-        int n_points, int n_polygons)
+        int n_points, int n_polygons, double target_percentage)
 {
     int old_diff = -1;
     unsigned int new_diff;
     unsigned int n_used, n_tried;
     unsigned int max_diff;
+    double current_percent = 0.0f;
     char output[64];
     Color_t *temporary;
     Color_t *canvas;
@@ -507,15 +508,19 @@ static void main_loop(Color_t *original, int width, int height,
         /* If we've improved, keep the new version */
         if (old_diff < 0 || new_diff < old_diff) {
             n_used++;
-            double percent = 100.0f - ((100.0f * (double)new_diff) / (double)max_diff);
+            current_percent =
+                100.0f - ((100.0f * (double)new_diff) / (double)max_diff);
 
             printf("%d / %d (tested %d) -- %.02f%%\n",
-                    n_used, n_polygons, n_tried, percent);
+                    n_used, n_polygons, n_tried, current_percent);
 
             memcpy(canvas, temporary, width*height*sizeof(Color_t));
             old_diff = new_diff;
             sprintf(output, "./out/img_%d.png", n_used);
             writePNG(output, canvas, width, height);
+
+            if (current_percent > target_percentage && target_percentage > 0.0f)
+                break;
         }
     } while (n_used < n_polygons);
 
@@ -524,7 +529,7 @@ static void main_loop(Color_t *original, int width, int height,
 }
 
 static void process_args(int argc, char **argv,
-        char **src_path, int *n_points, int *n_polygons)
+        char **src_path, int *n_points, int *n_polygons, double *percentage)
 {
     int c;
     int digit_optind = 0;
@@ -532,6 +537,7 @@ static void process_args(int argc, char **argv,
         { "src",   required_argument, 0, 0 },
         { "sides", required_argument, 0, 0 },
         { "npoly", required_argument, 0, 0 },
+        { "perc",  required_argument, 0, 0 },
         { NULL, 0, NULL, 0 }
     };
     int option_index = 0;
@@ -552,11 +558,9 @@ static void process_args(int argc, char **argv,
                 *n_polygons = atoi(optarg);
                 if (*n_polygons <= 0)
                     abort_("Must have at least 1 polygon.\n");
+            } else if (option_index == 3) {
+                *percentage = atof(optarg);
             }
-            printf("Option %s", long_options[option_index].name);
-            if (optarg)
-                printf(" with arg %s", optarg);
-            printf("\n");
             break;
 
         default:
@@ -576,14 +580,16 @@ int main(int argc, char **argv)
     int width, height;
     int n_polygons = N_POLYGONS;
     int n_sides    = POLYGON_POINTS;
+    double target_percentage = -1.0f;
     char *filename = INPUT_IMAGE;
 
-    process_args(argc, argv, &filename, &n_sides, &n_polygons);
+    process_args(argc, argv, &filename, &n_sides, &n_polygons,
+            &target_percentage);
 
     srand(time(NULL));
 
     original = readPNG(filename, &width, &height);
-    main_loop(original, width, height, n_sides, n_polygons);
+    main_loop(original, width, height, n_sides, n_polygons, target_percentage);
 
     free(original);
     return 0;
