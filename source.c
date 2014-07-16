@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <malloc.h>
+#include <pthread.h>
 #include <png.h>
 
 #define INPUT_IMAGE "starry-night-200x200.png"
@@ -343,6 +344,89 @@ static unsigned long canvasDiff(Color_t *src,
     return d;
 }
 
+typedef struct {
+    Color_t *src;
+    Color_t *canvas;
+    int start;
+    int length;
+    unsigned long diff;
+} DiffStruct_t;
+
+static void *canvasDiff_linear(void *input)
+{
+    DiffStruct_t *dt = input;
+    Color_t *src     = dt->src;
+    Color_t *canvas  = dt->canvas;
+    int start        = dt->start;
+    int length       = dt->length;
+
+    int i;
+    int r1, g1, b1;
+    int r2, g2, b2;
+    int dr, dg, db;
+    unsigned long d;
+
+    d = 0;
+
+    for (i = start; i < start+length; i++) {
+        r1 = src[i].red;
+        g1 = src[i].green;
+        b1 = src[i].blue;
+
+        r2 = canvas[i].red;
+        g2 = canvas[i].green;
+        b2 = canvas[i].blue;
+
+        if (r1 == -1 || g1 == -1 || b1 == -1
+                || r2 == -1 || g2 == -1 || b2 == -1)
+            continue;
+
+        dr = abs(r1 - r2);
+        dg = abs(g1 - g2);
+        db = abs(b1 - b2);
+
+        d += dr + dg + db;
+    }
+
+    dt->diff = d;
+
+    return NULL;
+}
+
+#define N_THREADS 4
+static unsigned long canvasDiff_threads(Color_t *src, Color_t *canvas,
+        int width, int height)
+{
+    DiffStruct_t diffs[N_THREADS];
+    pthread_t threads[N_THREADS];
+    int i;
+    int length;
+    unsigned long diff;
+
+    diff = 0;
+    length = (width * height) / N_THREADS;
+
+    for (i = 0; i < N_THREADS; i++) {
+        diffs[i].src    = src;
+        diffs[i].canvas = canvas;
+        diffs[i].start  = (i * length);
+        if (i * length >= width * height)
+            diffs[i].length = (width * height) - (i * length);
+        else
+            diffs[i].length = length;
+
+        pthread_create(&threads[i], NULL, canvasDiff_linear, (void *)&diffs[i]);
+    }
+
+    /* Wait for the threads to finish. */
+    for (i = 0; i < N_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+        diff += diffs[i].diff;
+    }
+
+    return diff;
+}
+
 /**
  * Compares two canvases.  This is an improvement upon the canvasDiff(...)
  * function because it will stop running after it determines that the canvases
@@ -612,9 +696,13 @@ static void main_loop(Color_t *original, int width, int height,
         drawPolygon(temporary, width, height, polygon, n_points, color, weight);
 
         /* Compare to the original. */
+#if 0
         new_diff = isSecondOneBetter(original, temporary, width, height, old_diff);
         if (new_diff < 0)
             continue;
+#else
+        new_diff = canvasDiff_threads(original, temporary, width, height);
+#endif
 
         /* If we've improved, keep the new version */
         if (old_diff < 0 || new_diff < old_diff) {

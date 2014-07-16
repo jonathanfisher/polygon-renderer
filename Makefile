@@ -9,7 +9,7 @@ DEP := $(patsubst %.c, %.d, $(SRC))
 #CFLAGS += -pg -lc -g
 CFLAGS += -O3
 
-LDFLAGS += -lm -lpng
+LDFLAGS += -lm -lpng -lpthread
 #LDFLAGS += -pg -lc -g
 
 .PHONY: clean
