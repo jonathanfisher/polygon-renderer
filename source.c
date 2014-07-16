@@ -94,6 +94,15 @@ static int coord_to_ind(int x, int y, int width)
 }
 
 /**
+ * Generate a random double in a given range.
+ */
+static double drandrange(double low, double high)
+{
+    return ((double)rand() / (double)((double)RAND_MAX + 1.0))
+        * (high - low) + low;
+}
+
+/**
  * Generate a random integer in a given range.  Note that this is intended to be
  * inclusive (low & high are valid values).
  */
@@ -170,7 +179,7 @@ static unsigned char weightedAverage(int a,
     int result;
 
     if (unlikely(weight > 1.0f || weight < 0.0f))
-        abort_("Weight must be between 0 and 1\n");
+        abort_("Weight must be between 0 and 1 (%f)\n", weight);
 
     if (unlikely(a == -1 && b == -1))
         abort_("%s: At least one of the arguments must be >= 0.\n", __func__);
@@ -596,8 +605,11 @@ static void main_loop(Color_t *original, int width, int height,
          * progress. */
         memcpy(temporary, canvas, width*height*sizeof(Color_t));
 
+        /* Generate a random weighting to use for merging in the new polygon. */
+        double weight = drandrange(0.25, 0.75);
+
         /* Add a polygon. */
-        drawPolygon(temporary, width, height, polygon, n_points, color, 0.5f);
+        drawPolygon(temporary, width, height, polygon, n_points, color, weight);
 
         /* Compare to the original. */
         new_diff = isSecondOneBetter(original, temporary, width, height, old_diff);
@@ -610,8 +622,8 @@ static void main_loop(Color_t *original, int width, int height,
             current_percent =
                 100.0f - ((100.0f * (double)new_diff) / (double)max_diff);
 
-            printf("%d / %d (tested %d) -- %.02f%%\n",
-                    n_used, n_polygons, n_tried, current_percent);
+            printf("%d / %d (tested %d) -- %.02f%% (Weight %2.2f)\n",
+                    n_used, n_polygons, n_tried, current_percent, weight);
 
             memcpy(canvas, temporary, width*height*sizeof(Color_t));
             old_diff = new_diff;
@@ -671,6 +683,7 @@ static void process_args(int argc, char **argv,
             printf("\t--src <path to PNG src image>\n");
             printf("\t--sides <# of polygon sides>\n");
             printf("\t--npoly <# of polygons to generate>\n");
+            printf("\t--perc <Target accuracy percentage <= 100.0f>\n");
             exit(0);
             break;
         }
