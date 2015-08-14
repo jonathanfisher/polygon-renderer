@@ -19,6 +19,9 @@
 
 #define N_POLYGONS 200
 
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 /*
  * These macros are used to help the compiler do some branch prediction.
  */
@@ -300,6 +303,53 @@ static void drawPolygon(Color_t *canvas, int width, int height,
     }
 }
 
+static double calculate_distance(int x1, int y1, int x2, int y2)
+{
+    const int delta_y = y2 - y1;
+    const int delta_x = x2 - x1;
+
+    return sqrt((delta_y * delta_y) + (delta_x * delta_x));
+}
+
+/**
+ * Merge the given circle into the given campus using the given color & weight
+ */
+static void drawCircle(Color_t *canvas, int width, int height,
+        int circle_x, int circle_y, int radius, Color_t color, float weight)
+{
+    int top, left, bottom, right;
+    int x, y;
+
+    if (circle_x < 0 || circle_x > width)
+    {
+        fprintf(stderr, "Invalid circle location (0 <= x <= width).\n");
+        return;
+    }
+
+    if (circle_y < 0 || circle_y > height)
+    {
+        fprintf(stderr, "Invalid circle location (0 <= y <= height).\n");
+        return;
+    }
+
+    top  = MAX(0, circle_y - radius);
+    left = MAX(0, circle_x - radius);
+    bottom = MIN(height, circle_y + radius);
+    right = MIN(width, circle_x + radius);
+
+    for (y = top; y < bottom; y++)
+    {
+        for (x = left; x < right; x++)
+        {
+            if (calculate_distance(x, y, circle_x, circle_y) <= radius)
+            {
+                /* Color in the pixel */
+                setWeightedPixel(canvas, width, height, x, y, color, weight);
+            }
+        }
+    }
+}
+
 /**
  * Compare two canvases and return the difference between them.  This is done
  * by keeping a running sum of the differences.  This is rather slow, and
@@ -392,6 +442,43 @@ static int isSecondOneBetter(Color_t *first,
         return d;
 
     return (d < difference) ? d : -1;
+}
+
+static unsigned long regionDiff(Color_t *first, Color_t *second, int width, int height,
+        int start_x, int start_y, int end_x, int end_y)
+{
+    int x, y;
+    unsigned long d;
+
+    d = 0;
+
+    for (y = start_y; y <= end_y; y++)
+    {
+        for (x = start_x; x <= end_x; x++)
+        {
+            int index = coord_to_ind(x, y, width);
+            int r1 = first[index].red;
+            int g1 = first[index].green;
+            int b1 = first[index].blue;
+            int r2 = second[index].red;
+            int g2 = second[index].green;
+            int b2 = second[index].blue;
+
+            if (r1 == -1 || g1 == -1 || b1 == -1 ||
+                    r2 == -1 || g2 == -1 || b2 == -1)
+            {
+                continue;
+            }
+
+            int dr = abs(r1 - r2);
+            int dg = abs(g1 - g2);
+            int db = abs(b1 - b2);
+
+            d += dr + dg + db;
+        }
+    }
+
+    return d;
 }
 
 /**
@@ -597,20 +684,43 @@ static void main_loop(Color_t *original, int width, int height,
     do {
         n_tried++;
 
-        /* Generate a randomly-colored polygon. */
+        /* Generate a randomly-colored circle. */
         Color_t color = getRandomColor();
-        Polygon_t polygon = getRandomPolygon(width, height, n_points);
+        double weight = drandrange(0.25, 0.75);
+        int x = randrange(0, width);
+        int y = randrange(0, height);
+        int radius = randrange(1, MIN(width, height) / 15);
 
         /* Create the temporary canvas by starting with the current work in
          * progress. */
         memcpy(temporary, canvas, width*height*sizeof(Color_t));
 
-        /* Generate a random weighting to use for merging in the new polygon. */
-        double weight = drandrange(0.25, 0.75);
-
         /* Add a polygon. */
-        drawPolygon(temporary, width, height, polygon, n_points, color, weight);
+        //drawPolygon(temporary, width, height, polygon, n_points, color, weight);
+        drawCircle(temporary, width, height, x, y, radius, color, weight);
 
+        unsigned long diff = regionDiff(original, temporary,
+                width, height,
+                MAX(0, x - radius), MAX(0, y - radius),
+                MIN(width, x + radius), MIN(height, y + radius));
+        unsigned long prev_diff = regionDiff(original, canvas,
+                width, height,
+                MAX(0, x - radius), MAX(0, y - radius),
+                MIN(width, x + radius), MIN(height, y + radius));
+
+        if (diff < prev_diff)
+        {
+            /* Use the changes */
+            n_used++;
+
+            printf("%d / %d (tested %d) (Weight %2.2f)\n",
+                    n_used, n_polygons, n_tried, weight);
+            memcpy(canvas, temporary, width*height*sizeof(Color_t));
+            sprintf(output, "./out/img_%d.png", n_used);
+            writePNG(output, canvas, width, height);
+        }
+
+#if 0
         /* Compare to the original. */
         new_diff = isSecondOneBetter(original, temporary, width, height, old_diff);
         if (new_diff < 0)
@@ -633,6 +743,7 @@ static void main_loop(Color_t *original, int width, int height,
             if (current_percent > target_percentage && target_percentage > 0.0f)
                 break;
         }
+#endif
     } while (n_used < n_polygons);
 
     free(temporary);
